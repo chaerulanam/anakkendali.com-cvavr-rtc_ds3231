@@ -1,0 +1,315 @@
+#include <wire.h>
+#include <RTCLib.h>
+
+/*
+static uint8_t read_i2c_register(uint8_t addr, uint8_t reg) {
+
+  wire_set_outputs((byte)reg);
+  Wire.requestFrom(addr, (byte)1);
+  return wire_read_byte();
+}
+
+static void write_i2c_register(uint8_t addr, uint8_t reg, uint8_t val) { 
+  wire_send_start();
+  wire_send_add_rw(_addr, 0);
+  wire_send_byte((int)reg);
+  wire_send_byte((byte)val);
+  wire_send_stop();
+}
+
+*/
+
+uint8_t wire_requestFrom(uint8_t slave, uint8_t *txseq, uint8_t txn, uint8_t *rxseq, uint8_t rxn)
+{
+
+    uint8_t ret = 1;
+
+    if (txn) {
+
+        if (i2c_start() && i2c_write(slave << 1)) {
+
+            uint8_t i;
+
+            for (i = 0; i < txn; i++)
+
+                i2c_write(txseq[i]);
+
+            ret = 0;
+
+        }
+
+    }
+
+    if (rxn) {
+
+        if (i2c_start() && i2c_write((slave << 1) | 1)) {
+
+            uint8_t i;
+
+            for (i = 0; i < rxn; i++)
+            { 
+            rxseq[i] = i2c_read (i != rxn - 1);            
+            }
+
+            ret = 0;
+
+        }
+
+    }
+
+    i2c_stop();
+
+    return ret;
+
+}
+
+
+#include <bcd.h>
+
+#include <stdio.h>     //for NULL
+
+
+unsigned char rtc_read(unsigned char address)
+
+{
+
+    unsigned char txbuf[1], rxbuf[1], status;
+
+    txbuf[0] = address;
+
+    status = wire_requestFrom(0x68, txbuf, 1, rxbuf, 1);
+
+    return rxbuf[0];
+
+}
+
+void rtc_write(unsigned char address,unsigned char data)
+
+{
+
+    unsigned char txbuf[4], status;
+
+    txbuf[0] = address;
+
+    txbuf[1] = data;
+
+    status = wire_requestFrom(0x68, txbuf, 2, NULL, 0);
+
+}
+
+void rtc_init(unsigned char rs,unsigned char sqwe,unsigned char out)
+
+{
+   
+    unsigned char txbuf[2], status, control = 0;   
+    
+
+    txbuf[0] = 14;         //DS3231 has different control bits
+
+    if (rs) control |= (rs & 3) << 3;
+
+    if (sqwe) control |= (1<<6);
+
+    if (out) control |= (1<<6);
+
+/*
+
+    txbuf[0] = 7;         //DS1307 has different control bits
+
+    if (rs) control |= (rs & 3) << 0;
+
+    if (sqwe) control |= (1<<4);
+
+    if (out) control |= (1<<7);
+
+*/
+
+//    I2C_INIT();  // Pavel's example expects the app to SEI and start the TWI
+
+    txbuf[1] = control;
+
+    status = wire_requestFrom(0x68, txbuf, 2, NULL, 0);
+
+}
+
+void rtc_get_time(unsigned char *hour,unsigned char *min,unsigned char *sec)
+
+{
+
+    unsigned char txbuf[1], rxbuf[3], status;
+
+    txbuf[0] = 0;
+
+    status = wire_requestFrom(0x68, txbuf, 1, rxbuf, 3);
+
+    *sec = bcd2bin(rxbuf[0] & 0x7F);
+
+    *min = bcd2bin(rxbuf[1] & 0x7F);
+
+    *hour = bcd2bin(rxbuf[2] & 0x3F);
+
+}
+
+void rtc_set_time(unsigned char hour,unsigned char min,unsigned char sec)
+
+{
+
+    unsigned char txbuf[4], status;
+
+    txbuf[0] = 0;
+
+    txbuf[1] = bin2bcd(sec);
+
+    txbuf[2] = bin2bcd(min);
+
+    txbuf[3] = bin2bcd(hour);
+
+    status = wire_requestFrom(0x68, txbuf, 4, NULL, 0);
+
+}
+
+void rtc_get_date(unsigned char *week_day, unsigned char *day,unsigned char *month,unsigned char *year)
+
+{
+
+    unsigned char txbuf[1], rxbuf[4], status;
+
+    txbuf[0] = 3;
+
+    status = wire_requestFrom(0x68, txbuf, 1, rxbuf, 4);
+
+    *week_day = bcd2bin(rxbuf[0] & 0x07);
+
+    *day = bcd2bin(rxbuf[1] & 0x3F);
+
+    *month = bcd2bin(rxbuf[2] & 0x1F);
+
+    *year = bcd2bin(rxbuf[3] & 0xFF);
+
+}
+
+void rtc_set_date(unsigned char week_day, unsigned char day,unsigned char month,unsigned char year)
+
+{
+
+    unsigned char txbuf[5], status;
+
+    txbuf[0] = 3;
+
+    txbuf[1] = bin2bcd(week_day);
+
+    txbuf[2] = bin2bcd(day);
+
+    txbuf[3] = bin2bcd(month);
+
+    txbuf[4] = bin2bcd(year);
+
+    status = wire_requestFrom(0x68, txbuf, 5, NULL, 0);
+
+}
+
+uint8_t conv2d(const char* p)
+{
+    uint8_t v = 0;
+
+    if ('0' <= *p && *p <= '9')
+    {
+        v = *p - '0';
+    }
+
+    return 10 * v + *++p - '0';
+}
+
+bool *setDateTime(const char* date, const char* time)
+{
+    uint16_t year;
+    uint8_t month;
+    uint8_t day;
+    uint8_t dayOfWeek;
+    uint8_t hour;
+    uint8_t minute;
+    uint8_t second; 
+    uint8_t yy, mm, adjustment;
+
+    year = conv2d(date + 9);
+
+    if (date[0] == 'J' && date[1] == 'a')
+    {
+     month = 1;
+    }
+    else if (date[0] == 'J' && date[2] == 'n')
+    {
+     month = 6;
+    }
+    else if (date[0] == 'J' && date[2] == 'l')
+    {
+     month = 7;
+    }
+    else if (date[0] == 'F')
+    {
+     month = 2;
+    }
+    else if (date[0] == 'M' && date[2] == 'r')
+    {
+     month = 3;
+    }
+    else if (date[0] == 'M' && date[2] == 'y')
+    {
+     month = 5;
+    }
+    else if (date[0] == 'A' && date[1] == 'p')
+    {
+     month = 4;
+    }
+    else if (date[0] == 'A' && date[1] == 'u')
+    {
+     month = 8;
+    }
+    else if (date[0] == 'S')
+    {
+     month = 9;
+    }
+    else if (date[0] == 'O')
+    {
+     month = 10;
+    }
+    else if (date[0] == 'N')
+    {
+     month = 11;
+    }
+    else if (date[0] == 'D')
+    {
+     month = 12;
+    }
+
+    day = conv2d(date + 4);
+    hour = conv2d(time);
+    minute = conv2d(time + 3);
+    second = conv2d(time + 6);  
+    
+    adjustment = (14 - month) / 12;
+    mm = month + 12 * adjustment - 2;
+
+    yy = year - adjustment;    
+    
+    dayOfWeek = (day + (13 * mm - 1) / 5 +
+    yy + yy / 4 - yy / 100 + yy / 400) % 7;  
+    
+    rtc_set_date(dayOfWeek, day, month, year);
+    rtc_set_time(hour,minute,second); 
+    
+}
+
+uint8_t read_i2c_register(uint8_t addr, uint8_t reg) {
+  i2c_start();
+  i2c_write(addr);
+  i2c_write((uint8_t)reg);
+  i2c_stop();
+
+  rtc_read(addr);
+  return i2c_read((uint8_t)addr);
+}
+
+bool rtc_lostPower(void) {
+  return (read_i2c_register(0x68, 0x0F) >> 7);
+}
